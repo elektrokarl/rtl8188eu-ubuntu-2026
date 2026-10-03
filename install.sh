@@ -1,7 +1,6 @@
 #!/bin/bash
 ###############################################################################
-# RTL8188EU Driver Installation - Kernel 7.0+ (CORRECT ORDER)
-# DOWNLOAD FIRST, THEN REMOVE DRIVER (to keep WiFi alive)
+# RTL8188EU Driver Installation - Kernel 7.0+ - PATCH-BASED FIX
 ###############################################################################
 
 set -e
@@ -23,8 +22,8 @@ info() { echo -e "${BLUE}[i]${NC} $1" | tee -a "$LOG_FILE"; }
 banner() {
     cat <<'EOF'
 ╔══════════════════════════════════════════════════════════════╗
-║  RTL8188EU Driver Installation - Kernel 7.0+                ║
-║  Download FIRST | Remove Driver AFTER | Compile | Install   ║
+║  RTL8188EU Driver - Kernel 7.0+                             ║
+║  Patch-based fix: EXTRA_CFLAGS & del_timer_sync              ║
 ╚══════════════════════════════════════════════════════════════╝
 EOF
 }
@@ -42,7 +41,7 @@ log "Kernel: $(uname -r)"
 # ============================================================================
 log "Installing dependencies..."
 apt update >/dev/null 2>&1
-apt install -y build-essential bc linux-headers-$(uname -r) libelf-dev git curl unzip >/dev/null 2>&1
+apt install -y build-essential bc linux-headers-$(uname -r) libelf-dev git curl patch >/dev/null 2>&1
 log "Dependencies ready"
 
 # ============================================================================
@@ -54,12 +53,12 @@ cd "$WORK_DIR"
 
 if git clone --depth 1 https://github.com/lwfinger/rtl8188eu.git driver_src 2>/dev/null; then
     log "Downloaded via git"
-elif curl -sL https://github.com/lwfinger/rtl8188eu/archive/refs/heads/master.zip -o driver.zip; then
-    log "Downloaded via ZIP (git failed)"
-    unzip -q driver.zip
+elif curl -sL https://github.com/lwfinger/rtl8188eu/archive/refs/heads/master.zip -o driver.zip 2>/dev/null; then
+    log "Downloaded via ZIP"
+    unzip -q driver.zip 2>/dev/null
     mv rtl8188eu-master driver_src
 else
-    error "Failed to download driver from all sources"
+    error "Failed to download driver"
 fi
 
 cd "$WORK_DIR/driver_src" || error "Failed to enter driver directory"
@@ -83,21 +82,24 @@ done
 log "Old drivers disabled"
 
 # ============================================================================
-# STEP 4: PATCH - Add linux/timer.h to correct location
+# STEP 4: Apply kernel 7.0 patch
 # ============================================================================
 log "Patching for kernel 7.0+..."
 
-if ! grep -q "#include <linux/timer.h>" include/osdep_service.h; then
-    sed -i '/#include <linux\/usb\/ch9\.h>/a #include <linux/timer.h>' include/osdep_service.h
-    
-    if ! grep -q "#include <linux/timer.h>" include/osdep_service.h; then
-        error "Failed to patch include/osdep_service.h"
-    fi
-    
-    info "Patch applied:"
-    grep -n "timer.h" include/osdep_service.h | sed 's/^/  /'
+# Patch 1: Fix Makefile - EXTRA_CFLAGS -> ccflags-y
+if grep -q "EXTRA_CFLAGS" Makefile; then
+    sed -i 's/EXTRA_CFLAGS/ccflags-y/g' Makefile
+    log "Makefile patched: EXTRA_CFLAGS -> ccflags-y"
 else
-    log "Patch already present"
+    log "Makefile already patched"
+fi
+
+# Patch 2: Fix timer API - del_timer_sync -> timer_delete_sync
+if grep -q "del_timer_sync" include/osdep_service.h; then
+    sed -i 's/del_timer_sync/timer_delete_sync/g' include/osdep_service.h
+    log "Timer API patched: del_timer_sync -> timer_delete_sync"
+else
+    log "Timer API already patched"
 fi
 
 # ============================================================================
@@ -110,12 +112,8 @@ NCORES=$(($(nproc) - 1))
 [ $NCORES -lt 1 ] && NCORES=1
 
 info "Building with $NCORES cores..."
-if make -j$NCORES 2>&1 | tail -20 >> "$LOG_FILE"; then
-    log "Compilation succeeded"
-else
-    warn "Parallel build had issues, retrying single-threaded..."
-    make clean 2>/dev/null || true
-    make -j1 2>&1 | tail -20 >> "$LOG_FILE" || error "Compilation failed"
+if ! make -j$NCORES 2>&1 | tee -a "$LOG_FILE" | tail -30; then
+    error "Compilation failed. See: $LOG_FILE"
 fi
 
 [ -f "8188eu.ko" ] || error "8188eu.ko not created"
@@ -129,12 +127,12 @@ mkdir -p /lib/modules/$(uname -r)/kernel/drivers/net/wireless/
 install -p -m 644 8188eu.ko /lib/modules/$(uname -r)/kernel/drivers/net/wireless/ || error "Installation failed"
 depmod -a 2>/dev/null || true
 update-initramfs -u 2>/dev/null || true
-log "Module installed to /lib/modules"
+log "Module installed"
 
 # ============================================================================
-# STEP 7: Configure Options
+# STEP 7: Configure
 # ============================================================================
-log "Configuring driver options..."
+log "Configuring driver..."
 cat > /etc/modprobe.d/rtl8188eu.conf <<'CONFIG'
 options 8188eu rtw_power_mgnt=0
 options 8188eu rtw_enusbss=0
@@ -142,10 +140,10 @@ options 8188eu rtw_max_acq_ass_retry=10
 CONFIG
 
 # ============================================================================
-# STEP 8: Load (optional - may not work until reboot)
+# STEP 8: Load
 # ============================================================================
 log "Attempting to load driver..."
-if modprobe 8188eu 2>&1; then
+if modprobe 8188eu 2>&1 >/dev/null; then
     sleep 2
     if lsmod | grep -q "^8188eu "; then
         log "✓✓✓ Driver loaded and active NOW"
