@@ -77,7 +77,7 @@ EOF
 
     # 3. Module options: no power-save / aggressive aggregation on both radios.
     cat > /etc/modprobe.d/wifi-stability.conf <<'EOF'
-# Intel (iwlwifi): disable power saving, software crypto off by default
+# Intel (iwlwifi): disable power saving and U-APSD
 options iwlwifi power_save=0 uapsd_disable=1
 options iwlmvm power_scheme=1
 # Realtek in-kernel driver: no USB DMA aggregation, no 40MHz on 2.4GHz
