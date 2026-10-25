@@ -215,3 +215,18 @@ For issues:
 2. Review `dmesg | grep -i 8188eu` for runtime errors
 3. Test connection with: `iw event` and `watch -n 1 'iw dev wlan0 link'`
 4. Report issues on the Aircrack-ng GitHub: https://github.com/aircrack-ng/rtl8188eus
+
+## Recurring Drops After Opening the Laptop (Resume Loop)
+
+Logs in `wifi_kernel_events.log` / `wifi_telemetry.csv` show the in-kernel `rtl8xxxu`
+driver (not `8188eu`) in an association-timeout → deauth → USB reset loop, the internal
+Intel `iwlwifi` failing against the same AP, and repeated `ata1` SATA
+`failed command` / `hard resetting link` errors (likely a failing disk or cable,
+which stalls the system and mimics WiFi drops).
+
+Collect data and apply link-safe mitigations (power-save off, USB autosuspend off,
+module options; the active default-route interface is never touched live):
+
+```bash
+sudo bash wifi-mitigate.sh        # collect + apply (or: collect | apply)
+```
